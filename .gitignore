@@ -1,0 +1,20 @@
+# 环境变量 - 包含敏感 API Key 严禁提交
+.env
+
+# Chroma 向量库持久化目录
+chroma_db/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+
+# 虚拟环境
+.venv/
