@@ -19,12 +19,12 @@ class RAGService:
             return {"success": False, "error": str(e)}
 
     # 传入问题，返回流式结果
-    def ask_stream(self, question: str) -> Iterator[str]:
+    def ask_stream(self, question: str, chat_history: list = None) -> Iterator[str]:
         if not question or not question.strip():  # 校验：问题不能为空
             yield "【错误】问题不能为空"
             return
         try:
-            for token in _query(question, stream=True):  # 委托编排层流式查询
+            for token in _query(question, stream=True, chat_history=chat_history):  # 委托编排层流式查询，传入聊天历史用于改写
                 yield token  # 逐个透传 token 给前端
         except Exception as e:
             yield f"\n【错误】{str(e)}"

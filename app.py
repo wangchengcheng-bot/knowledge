@@ -100,7 +100,7 @@ def main():
             message_placeholder = st.empty()  # 占位，用于流式更新
             full_response = ""  # 累积完整回答
 
-            for token in rag_service.ask_stream(prompt_input):  # 通过服务层流式获取回答
+            for token in rag_service.ask_stream(prompt_input, st.session_state.chat_history[:-1]):  # 通过服务层流式获取回答，传入历史消息用于查询改写
                 full_response += token  # 逐 token 拼接
                 message_placeholder.markdown(full_response + "▌")  # 实时显示（光标闪烁）
 
