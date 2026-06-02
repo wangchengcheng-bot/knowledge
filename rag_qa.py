@@ -1,6 +1,4 @@
 from langchain_openai import ChatOpenAI  # OpenAI兼容的对话模型（通义千问通过兼容接口调用）
-from langchain_core.output_parsers import StrOutputParser  # 输出解析器：把模型返回的对象转成纯文本字符串
-from langchain_core.runnables import RunnablePassthrough  # 管道直通器：把用户问题原样传递下去
 from langchain_core.prompts import ChatPromptTemplate  # 对话模板：定义 system/human 消息格式
 from config import DASHSCOPE_API_KEY, LLM_MODEL  # 导入API Key和模型名
 
@@ -33,30 +31,3 @@ def create_prompt():
         ("system", SYSTEM_PROMPT),  # system 消息：告诉模型它的角色和规则
         ("human", "{question}"),  # human 消息：用户的提问，{question} 是占位符
     ])
-
-
-def create_rag_chain(retriever, llm=None):
-    if llm is None:  # 如果没有传入模型
-        llm = create_llm()  # 自动创建一个
-
-    prompt = create_prompt()  # 创建提示词模板
-
-    rag_chain = (  # LCEL 管道式构建 RAG 链
-        {"context": retriever | format_docs, "question": RunnablePassthrough()}  # 第1步：检索文档并格式化 + 传递问题
-        | prompt  # 第2步：把检索结果和问题填入提示词模板
-        | llm  # 第3步：调用大模型生成回答
-        | StrOutputParser()  # 第4步：解析输出，提取纯文本
-    )
-
-    print("[RAG链] LCEL 检索增强生成链已构建")  # 提示链构建完成
-    return rag_chain  # 返回构建好的链
-
-
-def ask(rag_chain, question: str) -> str:
-    print(f"\n{'='*60}")  # 打印分隔线
-    print(f"[用户问题] {question}")  # 打印用户的问题
-    print(f"{'='*60}")  # 打印分隔线
-    answer = rag_chain.invoke(question)  # 调用链执行问答，invoke 是同步执行
-    print(f"[AI回答] {answer}")  # 打印AI的回答
-    print(f"{'='*60}")  # 打印分隔线
-    return answer  # 返回回答内容
