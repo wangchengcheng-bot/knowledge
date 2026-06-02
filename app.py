@@ -1,115 +1,85 @@
-import tempfile  # 创建临时文件（存放用户上传的 PDF）
-import streamlit as st  # Streamlit 前端框架
+"""Streamlit 前端：PDF 上传、索引构建、RAG 问答交互界面。"""
 
-from service import rag_service  # 服务层是前端唯一入口，不碰任何模块
+import streamlit as st  # 前端框架：构建 Web 交互界面
+from service import check_exists, calculate_pdf_hash, service_build  # 导入服务层函数
+from orchestrator import is_ready, query  # 导编排层：状态检查 + 问答
+from orchestrator import get_vector_count  # 获取知识库向量条数
 
+st.set_page_config(page_title="知识库 RAG 问答系统", page_icon="📚", layout="wide")  # 页面标题、图标和宽屏布局
 
-st.set_page_config(  # Streamlit 页面全局设置
-    page_title="RAG 知识库问答",  # 浏览器标签页标题
-    page_icon="📚",  # 标签页图标
-    layout="wide",  # 宽屏布局
-    initial_sidebar_state="expanded",  # 侧边栏默认展开
-)
+st.title("知识库 RAG 问答系统")  # 大标题
 
-st.title("📚 RAG 知识库问答系统")  # 页面大标题
-st.caption("基于通义千问 + Chroma 向量库 | LCEL 链式构建")  # 标题下方小字说明
+# ---------- 侧边栏：文件上传 & 索引管理 ----------
+with st.sidebar:  # 用 Streamlit 的侧边栏布局
+    st.header("📄 文档管理")  # 侧边栏标题
 
+    # 显示当前知识库状态
+    ready = is_ready()  # 检查知识库是否有数据
+    if ready:  # 有数据
+        st.success(f"知识库就绪 —— 共 {get_vector_count()} 条向量")  # 绿色提示 + 向量数量
+    else:  # 无数据
+        st.info("知识库为空，请上传 PDF 文件")  # 蓝色提示
 
-def init_session():
-    defaults = {  # 页面首次加载时创建默认会话状态
-        "chat_history": [],  # 聊天记录：存用户和 AI 的消息列表
-        "index_ready": False,  # 知识库是否就绪
-    }
-    for k, v in defaults.items():  # 遍历默认项
-        if k not in st.session_state:  # 如果还没初始化
-            st.session_state[k] = v  # 写入默认值
+    uploaded_file = st.file_uploader("选择 PDF 文件", type=["pdf"], key="pdf_uploader")  # 文件上传控件：只接受 .pdf
 
+    if uploaded_file is not None:  # 用户已经选好了文件
+        file_bytes = uploaded_file.getvalue()  # 读取文件的二进制内容
+        file_hash = calculate_pdf_hash(file_bytes)  # 计算文件哈希
+        collection_name, _ = check_exists(file_bytes)  # 检查是否已构建过
 
-def main():
-    init_session()  # 每次 Streamlit rerun 时确保会话状态正确
+        if collection_name is not None:  # 该文件已经构建过
+            st.warning(f"该文件已存在于知识库中，无需重复构建。\n\n文件哈希：`{file_hash}`")  # 黄色警告提示
+        else:  # 新文件，未构建过
+            st.info(f"新文件，哈希：`{file_hash}`")  # 显示文件哈希
 
-    # ========== 侧边栏 ==========
-    with st.sidebar:  # 所有控制项放在侧边栏
-        st.header("📂 知识库管理")  # 侧边栏标题
+        if st.button("构建索引", type="primary", use_container_width=True):  # 大大的蓝色按钮，撑满宽度
+            if collection_name is not None:  # 用户点击了按钮，但文件已存在
+                st.warning("该文件已构建过索引，无需重复操作。")  # 提醒不需要构建
+            else:  # 新文件，可以构建
+                with st.spinner("正在处理 PDF 并构建索引..."):  # 显示加载动画
+                    try:
+                        count = service_build(file_bytes, collection_name=file_hash)  # 执行索引构建
+                        st.success(f"索引构建完成！共 {count} 条向量入库。")  # 成功绿提示
+                        st.rerun()  # 刷新页面，更新知识库状态
+                    except Exception as e:  # 构建过程出错
+                        st.error(f"构建失败：{e}")  # 红色错误提示
 
-        uploaded_file = st.file_uploader(  # PDF 上传组件
-            "上传 PDF 文档",  # 标签
-            type=["pdf"],  # 只接受 PDF
-            help="支持中文 PDF，基于 PyMuPDF 解析",  # 悬停说明
-        )
+# ---------- 主区域：对话问答 ----------
+# 初始化 session_state 中存储的对话历史
+if "messages" not in st.session_state:  # 第一次运行，还没有消息列表
+    st.session_state.messages = []  # 初始化为空列表
 
-        st.divider()  # 分割线
+# 渲染历史消息（从上到下显示之前的对话记录）
+for msg in st.session_state.messages:  # 遍历历史消息
+    with st.chat_message(msg["role"]):  # 根据角色渲染气泡（user/assistant）
+        st.markdown(msg["content"])  # 用 Markdown 格式显示消息内容
 
-        if uploaded_file is not None:  # 已上传文件才显示按钮
-            if st.button("🔨 构建向量索引", type="primary", use_container_width=True):  # 构建按钮
-                with st.spinner("正在处理 PDF..."):  # 加载动画
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:  # 创建临时文件
-                        tmp.write(uploaded_file.getvalue())  # 写入上传内容
-                        tmp_path = tmp.name  # 拿到路径
-                    result = rag_service.build_index(tmp_path)  # 委托服务层构建，分块参数使用后端默认值
+if prompt := st.chat_input("请输入您的问题..."):  # 底部聊天输入框，有输入时 prompt 不为空
+    st.session_state.messages.append({"role": "user", "content": prompt})  # 将用户消息存入历史
+    with st.chat_message("user"):  # 渲染用户消息气泡
+        st.markdown(prompt)  # 显示用户输入的内容
 
-                if result["success"]:  # 构建成功
-                    st.success(f"✅ 索引构建完成！共 {result['vector_count']} 条向量")  # 绿色提示
-                    st.session_state.index_ready = True  # 标记就绪
-                    st.rerun()  # 刷新页面
-                else:  # 构建失败
-                    st.error(f"❌ 构建失败：{result['error']}")  # 红色错误
+    with st.chat_message("assistant"):  # 渲染助手消息气泡
+        if not is_ready():  # 知识库还没有数据
+            response_text = "请先在侧边栏上传 PDF 文件并构建索引。"  # 提示用户先上传
+            st.markdown(response_text)  # 显示提示
+        else:  # 知识库就绪
+            chat_history_dicts = [  # 从 session_state 提取对话历史（排除当前消息）
+                {"role": m["role"], "content": m["content"]}
+                for m in st.session_state.messages[:-1]  # 排除最新一条（当前用户消息）
+            ]
+            with st.spinner("正在检索知识库并生成回答..."):  # 显示等待动画
+                try:
+                    response_placeholder = st.empty()  # 空占位符，用于流式更新内容
+                    full_response = ""  # 累积完整回答
 
-        st.divider()  # 分割线
+                    # 流式调用问答，逐 token 显示
+                    for token in query(prompt, stream=True, chat_history=chat_history_dicts):
+                        full_response += token  # 拼接 token
+                        response_placeholder.markdown(full_response + "▌")  # 显示累积内容 + 闪烁光标
+                    response_placeholder.markdown(full_response)  # 全部完成后去掉光标，显示最终结果
+                except Exception as e:  # 问答过程出错
+                    st.error(f"处理出错：{e}")  # 显示错误信息
+                    full_response = f"处理出错：{e}"  # 错误信息作为回复
 
-        st.subheader("📊 当前状态")  # 状态面板
-        status = rag_service.get_status()  # 从服务层获取状态
-        if status["index_ready"]:  # 更新会话状态
-            st.session_state.index_ready = True
-
-        col1, col2 = st.columns(2)  # 两列布局
-        with col1:  # 左列
-            st.metric("向量条数", status["vector_count"])  # 显示向量数
-        with col2:  # 右列
-            st.metric("向量来源",  # 显示数据来源
-                      "已有索引" if status["vector_count"] > 0 and uploaded_file is None  # 已有数据
-                      else ("新文档" if uploaded_file else "无"))  # 新文档 / 无
-
-        if status["index_ready"]:  # 就绪
-            st.success("✅ 知识库就绪")
-        else:  # 未就绪
-            st.warning("⚠️ 请先上传 PDF 构建索引")
-
-        st.divider()  # 分割线
-
-        st.caption(f"LLM: qwen-turbo | Embedding: text-embedding-v1")  # 模型信息
-        if st.button("🗑️ 清除对话", use_container_width=True):  # 清除按钮
-            st.session_state.chat_history = []  # 清空聊天记录
-            st.rerun()  # 刷新
-
-    # ========== 主区域：聊天界面 ==========
-    for msg in st.session_state.chat_history:  # 渲染历史消息
-        with st.chat_message(msg["role"]):  # 按角色显示气泡
-            st.markdown(msg["content"])  # 渲染内容
-
-    if prompt_input := st.chat_input(  # 聊天输入框
-        "输入你的问题...",  # 占位文字
-        disabled=not st.session_state.index_ready  # 知识库未就绪时禁用
-    ):
-        st.session_state.chat_history.append({"role": "user", "content": prompt_input})  # 保存用户消息
-
-        with st.chat_message("user"):  # 用户气泡
-            st.markdown(prompt_input)
-
-        with st.chat_message("assistant"):  # AI 气泡
-            message_placeholder = st.empty()  # 占位，用于流式更新
-            full_response = ""  # 累积完整回答
-
-            for token in rag_service.ask_stream(prompt_input, st.session_state.chat_history[:-1]):  # 通过服务层流式获取回答，传入历史消息用于查询改写
-                full_response += token  # 逐 token 拼接
-                message_placeholder.markdown(full_response + "▌")  # 实时显示（光标闪烁）
-
-            message_placeholder.markdown(full_response)  # 最终显示完整回答
-
-        st.session_state.chat_history.append(  # 保存 AI 回答
-            {"role": "assistant", "content": full_response}
-        )
-
-
-if __name__ == "__main__":  # 直接运行时启动
-    main()
+        st.session_state.messages.append({"role": "assistant", "content": full_response})  # 将助手回复存入历史

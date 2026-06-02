@@ -1,3 +1,5 @@
+"""配置模块：从 .env 读取敏感信息，定义项目全局常量。"""
+
 import os  # 读取系统环境变量
 from dotenv import load_dotenv  # 加载 .env 文件里的配置
 
